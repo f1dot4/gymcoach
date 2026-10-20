@@ -4,6 +4,7 @@ import { isLocale, locales } from '@/i18n/config';
 import englishMessages from '@/messages/en';
 import frenchMessages from '@/messages/fr';
 import russianMessages from '@/messages/ru';
+import germanMessages from '@/messages/de';
 
 function messageKeys(value: unknown, prefix = ''): string[] {
   if (typeof value === 'string') return [prefix];
@@ -16,17 +17,18 @@ function messageKeys(value: unknown, prefix = ''): string[] {
 
 describe('i18n configuration', () => {
   it('recognizes only supported locales', () => {
-    expect(locales).toEqual(['en', 'fr', 'ru']);
+    expect(locales).toEqual(['en', 'fr', 'ru', 'de']);
     expect(isLocale('en')).toBe(true);
     expect(isLocale('fr')).toBe(true);
     expect(isLocale('ru')).toBe(true);
-    expect(isLocale('de')).toBe(false);
+    expect(isLocale('de')).toBe(true);
     expect(isLocale(undefined)).toBe(false);
   });
 
   it('keeps every locale dictionary structurally complete', () => {
     expect(messageKeys(russianMessages).sort()).toEqual(messageKeys(englishMessages).sort());
     expect(messageKeys(frenchMessages).sort()).toEqual(messageKeys(englishMessages).sort());
+    expect(messageKeys(germanMessages).sort()).toEqual(messageKeys(englishMessages).sort());
   });
 
   it('uses Russian plural categories', () => {
