@@ -22,6 +22,20 @@ export async function hydrateFromServerSets(
   userId: string,
 ): Promise<void> {
   const db = getDB();
+
+  // Delete any existing rows that have a serverId matching the server sets
+  // we're about to insert. This prevents duplicates when a set was logged
+  // locally (with a generated localId), synced to server (got a serverId),
+  // and now we're hydrating after a page reload (would create a new row with
+  // localId srv_${serverId}). Without this, language switches mid-workout
+  // duplicate every logged set.
+  const serverIds = new Set(serverSets.map((s) => s.id));
+  await db.pendingSets
+    .where('sessionId')
+    .equals(sessionId)
+    .filter((row) => row.serverId != null && serverIds.has(row.serverId))
+    .delete();
+
   const records: PendingSet[] = serverSets.map((s) => ({
     localId: `srv_${s.id}`,
     sessionId,

@@ -11,8 +11,9 @@ vi.mock('@/lib/indexeddb', async (importOriginal) => {
 
 import { hydrateFromServerSets } from '@/lib/sync-hydration';
 
-// The rows behind `bulkPut` and `where('sessionId').equals(...).modify(...)`,
-// the two calls the hydration makes, keyed by localId like the real table.
+// The rows behind `bulkPut`, `where('sessionId').equals(...).modify(...)`,
+// and `where('sessionId').equals(...).filter(...).delete()`,
+// keyed by localId like the real table.
 function rowsDB(rows: PendingSet[]) {
   return {
     pendingSets: {
@@ -30,6 +31,18 @@ function rowsDB(rows: PendingSet[]) {
             for (const row of matching) change(row);
             return matching.length;
           }),
+          filter: vi.fn((predicate: (row: PendingSet) => boolean) => ({
+            delete: vi.fn(async () => {
+              const toDelete = rows.filter(
+                (row) => row[index as keyof PendingSet] === value && predicate(row),
+              );
+              for (const row of toDelete) {
+                const idx = rows.indexOf(row);
+                if (idx >= 0) rows.splice(idx, 1);
+              }
+              return toDelete.length;
+            }),
+          })),
         })),
       })),
     },
@@ -111,5 +124,42 @@ describe('hydrateFromServerSets ownership (#490)', () => {
     await hydrateFromServerSets('session-a', [], 'user-a');
 
     expect(rows[0]?.userId).toBe('user-b');
+  });
+
+  it('removes existing synced rows before inserting srv_ versions (no duplicates on reload)', async () => {
+    // Simulates: user logs a set (generated localId), it syncs (gets serverId),
+    // then page reloads (language switch). Without deduplication, hydration would
+    // create a second row with localId srv_${serverId}, duplicating the set.
+    const localRow: PendingSet = {
+      localId: 'local_generated_123',
+      sessionId: 'session-a',
+      userId: 'user-a',
+      exerciseId: 'bench',
+      setNumber: 1,
+      weight: 60,
+      reps: 5,
+      rir: 2,
+      durationSec: null,
+      distanceM: null,
+      notes: null,
+      isWarmup: false,
+      isDropSet: false,
+      block: null,
+      createdAt: 1,
+      status: 'synced',
+      serverId: 'set-1', // Already synced, has a serverId
+      syncedAt: 2,
+      attempts: 0,
+      lastError: null,
+    };
+    const rows = [localRow];
+    mockGetDB.mockReturnValue(rowsDB(rows));
+
+    await hydrateFromServerSets('session-a', [serverSet], 'user-a');
+
+    // The original local_generated_123 row should be gone, replaced by srv_set-1
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.localId).toBe('srv_set-1');
+    expect(rows[0]?.serverId).toBe('set-1');
   });
 });
