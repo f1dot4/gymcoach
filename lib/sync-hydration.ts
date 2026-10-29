@@ -29,11 +29,15 @@ export async function hydrateFromServerSets(
   // and now we're hydrating after a page reload (would create a new row with
   // localId srv_${serverId}). Without this, language switches mid-workout
   // duplicate every logged set.
+  //
+  // IMPORTANT: Only delete synced rows. Rows with status 'pending', 'syncing',
+  // or 'failed' have unsaved local changes that must not be discarded. The sync
+  // queue will reconcile them after hydration completes.
   const serverIds = new Set(serverSets.map((s) => s.id));
   await db.pendingSets
     .where('sessionId')
     .equals(sessionId)
-    .filter((row) => row.serverId != null && serverIds.has(row.serverId))
+    .filter((row) => row.serverId != null && serverIds.has(row.serverId) && row.status === 'synced')
     .delete();
 
   const records: PendingSet[] = serverSets.map((s) => ({

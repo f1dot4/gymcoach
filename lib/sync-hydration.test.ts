@@ -162,4 +162,46 @@ describe('hydrateFromServerSets ownership (#490)', () => {
     expect(rows[0]?.localId).toBe('srv_set-1');
     expect(rows[0]?.serverId).toBe('set-1');
   });
+
+  it('preserves pending rows with unsaved edits during hydration', async () => {
+    // Simulates: user logs a set, it syncs, user edits it (status='pending'),
+    // then page reloads BEFORE the edit syncs. The pending edit must not be lost.
+    const pendingEditRow: PendingSet = {
+      localId: 'local_generated_123',
+      sessionId: 'session-a',
+      userId: 'user-a',
+      exerciseId: 'bench',
+      setNumber: 1,
+      weight: 100, // Edited value (server has 60)
+      reps: 5,
+      rir: 2,
+      durationSec: null,
+      distanceM: null,
+      notes: null,
+      isWarmup: false,
+      isDropSet: false,
+      block: null,
+      createdAt: 1,
+      status: 'pending', // Unsaved edit
+      serverId: 'set-1',
+      syncedAt: 2,
+      attempts: 0,
+      lastError: null,
+    };
+    const rows = [pendingEditRow];
+    mockGetDB.mockReturnValue(rowsDB(rows));
+
+    await hydrateFromServerSets('session-a', [serverSet], 'user-a');
+
+    // Both rows should exist: the pending edit AND the hydrated server version
+    expect(rows).toHaveLength(2);
+    const localRow = rows.find((r) => r.localId === 'local_generated_123');
+    const serverRow = rows.find((r) => r.localId === 'srv_set-1');
+    expect(localRow).toBeDefined();
+    expect(localRow?.status).toBe('pending');
+    expect(localRow?.weight).toBe(100); // Pending edit preserved
+    expect(serverRow).toBeDefined();
+    expect(serverRow?.status).toBe('synced');
+    expect(serverRow?.weight).toBe(60); // Server's old value
+  });
 });
