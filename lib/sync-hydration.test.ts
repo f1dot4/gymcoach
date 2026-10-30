@@ -15,37 +15,48 @@ import { hydrateFromServerSets } from '@/lib/sync-hydration';
 // and `where('sessionId').equals(...).filter(...).delete()`,
 // keyed by localId like the real table.
 function rowsDB(rows: PendingSet[]) {
-  return {
-    pendingSets: {
-      bulkPut: vi.fn(async (records: PendingSet[]) => {
-        for (const record of records) {
-          const at = rows.findIndex((row) => row.localId === record.localId);
-          if (at >= 0) rows[at] = record;
-          else rows.push(record);
-        }
-      }),
-      where: vi.fn((index: string) => ({
-        equals: vi.fn((value: string) => ({
-          modify: vi.fn(async (change: (row: PendingSet) => void) => {
-            const matching = rows.filter((row) => row[index as keyof PendingSet] === value);
-            for (const row of matching) change(row);
-            return matching.length;
+  const pendingSets = {
+    bulkPut: vi.fn(async (records: PendingSet[]) => {
+      for (const record of records) {
+        const at = rows.findIndex((row) => row.localId === record.localId);
+        if (at >= 0) rows[at] = record;
+        else rows.push(record);
+      }
+    }),
+    where: vi.fn((index: string) => ({
+      equals: vi.fn((value: string) => ({
+        modify: vi.fn(async (change: (row: PendingSet) => void) => {
+          const matching = rows.filter((row) => row[index as keyof PendingSet] === value);
+          for (const row of matching) change(row);
+          return matching.length;
+        }),
+        filter: vi.fn((predicate: (row: PendingSet) => boolean) => ({
+          delete: vi.fn(async () => {
+            const toDelete = rows.filter(
+              (row) => row[index as keyof PendingSet] === value && predicate(row),
+            );
+            for (const row of toDelete) {
+              const idx = rows.indexOf(row);
+              if (idx >= 0) rows.splice(idx, 1);
+            }
+            return toDelete.length;
           }),
-          filter: vi.fn((predicate: (row: PendingSet) => boolean) => ({
-            delete: vi.fn(async () => {
-              const toDelete = rows.filter(
-                (row) => row[index as keyof PendingSet] === value && predicate(row),
-              );
-              for (const row of toDelete) {
-                const idx = rows.indexOf(row);
-                if (idx >= 0) rows.splice(idx, 1);
-              }
-              return toDelete.length;
-            }),
-          })),
+          toArray: vi.fn(async () => {
+            return rows.filter(
+              (row) => row[index as keyof PendingSet] === value && predicate(row),
+            );
+          }),
         })),
       })),
-    },
+    })),
+  };
+
+  return {
+    pendingSets,
+    transaction: vi.fn(async (_mode: string, _table: unknown, fn: () => Promise<void>) => {
+      // In the mock, just execute the function directly (no real transaction isolation)
+      await fn();
+    }),
   };
 }
 
@@ -203,5 +214,44 @@ describe('hydrateFromServerSets ownership (#490)', () => {
     expect(serverRow).toBeDefined();
     expect(serverRow?.status).toBe('synced');
     expect(serverRow?.weight).toBe(60); // Server's old value
+  });
+
+  it('preserves equipmentDroppedNotice from deleted synced rows (#337)', async () => {
+    // Simulates: user logs a set with equipment, it syncs, server drops the
+    // equipment (machine was deleted/unlinked) and writes equipmentDroppedNotice,
+    // then page reloads. The notice must be copied to the srv_ record so the
+    // runner can show "machine was not recorded".
+    const syncedRowWithNotice: PendingSet = {
+      localId: 'local_generated_123',
+      sessionId: 'session-a',
+      userId: 'user-a',
+      exerciseId: 'bench',
+      setNumber: 1,
+      weight: 60,
+      reps: 5,
+      rir: 2,
+      durationSec: null,
+      distanceM: null,
+      notes: null,
+      isWarmup: false,
+      isDropSet: false,
+      block: null,
+      createdAt: 1,
+      status: 'synced',
+      serverId: 'set-1',
+      syncedAt: 2,
+      attempts: 0,
+      lastError: null,
+      equipmentDroppedNotice: 'eq-123', // Notice from server refusing the equipment
+    };
+    const rows = [syncedRowWithNotice];
+    mockGetDB.mockReturnValue(rowsDB(rows));
+
+    await hydrateFromServerSets('session-a', [serverSet], 'user-a');
+
+    // The srv_ record should have the equipmentDroppedNotice preserved
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.localId).toBe('srv_set-1');
+    expect(rows[0]?.equipmentDroppedNotice).toBe('eq-123');
   });
 });
